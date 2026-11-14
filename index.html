@@ -5,25 +5,101 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nightfall: The Last Signal</title>
   <style>
+    :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0c1115; color: #e9dec4; font-family: Georgia, serif; overflow: hidden; }
-    body::before { content: ""; position: fixed; inset: -20%; background: repeating-linear-gradient(111deg, transparent 0 90px, rgba(112,146,129,.08) 91px 93px); transform: rotate(-7deg); }
-    main { position: relative; width: min(720px, calc(100% - 48px)); text-align: center; padding: 72px 32px; border-top: 2px solid #e7a84d; border-bottom: 1px solid #456056; background: rgba(21,29,32,.78); }
-    h1 { margin: 0; font-size: clamp(2.4rem, 8vw, 4.7rem); letter-spacing: .16em; }
-    h2 { margin: 10px 0 42px; color: #e7a84d; font-size: .95rem; letter-spacing: .35em; }
-    p { color: #b6c4b9; line-height: 1.7; }
-    a { display: inline-block; margin-top: 24px; padding: 15px 28px; color: #e9dec4; text-decoration: none; font: 700 .8rem system-ui, sans-serif; letter-spacing: .12em; border: 1px solid #6b877a; background: #172123; }
-    a:hover { background: #263936; border-color: #e7a84d; }
-    small { display: block; margin-top: 44px; color: #718178; font: .7rem system-ui, sans-serif; letter-spacing: .09em; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090e10; color: #e9dec4; font-family: ui-monospace, "Cascadia Code", monospace; }
+    #shell { width: min(1280px, 100vw); padding: 16px; }
+    canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #142022; border: 1px solid #485f56; box-shadow: 0 20px 80px #000; image-rendering: pixelated; }
+    #tips { margin: 12px 4px 0; display: flex; justify-content: space-between; gap: 20px; color: #82958b; font-size: 11px; letter-spacing: .06em; }
+    kbd { color: #e7a84d; font: inherit; }
+    @media (max-width: 600px) { #shell { padding: 0; } canvas { border-width: 0; } #tips { padding: 0 12px; font-size: 9px; } }
   </style>
 </head>
 <body>
-  <main>
-    <h1>NIGHTFALL</h1>
-    <h2>THE LAST SIGNAL</h2>
-    <p>An original, asset-free asymmetric survival-horror prototype built in Godot 4. Choose Survivor or Warden, repair relays, hunt through the fog, and escape the night.</p>
-    <a href="https://github.com/pandavid153/dead-by-dunklight">VIEW AND RUN THE GODOT PROJECT</a>
-    <small>GODOT 4.3+ REQUIRED FOR LOCAL PLAY</small>
-  </main>
+  <div id="shell">
+    <canvas id="game" width="1280" height="720" aria-label="Nightfall playable game"></canvas>
+    <div id="tips"><span><kbd>WASD</kbd> MOVE &nbsp; <kbd>E</kbd> INTERACT / SPRINT &nbsp; <kbd>SPACE</kbd> STRIKE</span><span>ESC RETURN TO MENU</span></div>
+  </div>
+  <script>
+  (() => {
+    "use strict";
+    const canvas = document.querySelector("#game"), ctx = canvas.getContext("2d");
+    const W = 1280, H = 720, world = {x:42,y:76,w:1196,h:580};
+    const key = new Set();
+    const obstacles = [[114,308,196,34],[424,130,38,158],[744,166,170,35],[836,394,44,165],[400,526,220,35],[98,564,125,32],[1010,285,150,34],[575,355,50,95]];
+    const gens = [{x:234,y:192,p:0},{x:640,y:312,p:0},{x:1056,y:520,p:0}];
+    const exit = {x:1140,y:130};
+    let mode = "menu", role = "survivor", player, warden, hp, stamina, elapsed, swing, hit, message, messageT, result, last = 0, audio;
+    const dust = Array.from({length:42}, (_,i) => ({x:(i*173)%1200+40,y:(i*79)%570+76,s:5+(i%5)*4}));
+    const crows = Array.from({length:12}, (_,i) => ({x:(i*227)%1130+70,y:(i*149)%530+90}));
+
+    addEventListener("keydown", e => { key.add(e.code); if (["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) e.preventDefault(); });
+    addEventListener("keyup", e => key.delete(e.code));
+    canvas.addEventListener("click", e => {
+      const r=canvas.getBoundingClientRect(), x=(e.clientX-r.left)*W/r.width, y=(e.clientY-r.top)*H/r.height;
+      if (mode === "menu") { if (x>290&&x<610&&y>475&&y<550) start("survivor"); if (x>670&&x<990&&y>475&&y<550) start("warden"); }
+      else if (mode === "result") mode="menu";
+    });
+
+    function beep(freq=180, duration=.07, type="sine", volume=.025) {
+      try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.type=type;o.frequency.value=freq;g.gain.value=volume;o.connect(g).connect(audio.destination);o.start();g.gain.exponentialRampToValueAtTime(.0001,audio.currentTime+duration);o.stop(audio.currentTime+duration); } catch (_) {}
+    }
+    function start(chosen) {
+      role=chosen; mode="play"; player=chosen==="survivor"?{x:310,y:485}:{x:980,y:218}; warden=chosen==="survivor"?{x:980,y:218}:{x:310,y:485}; hp=2; stamina=100; elapsed=0; swing=0; hit=0; result=""; message="RESTORE THREE RELAYS"; messageT=2.5; gens.forEach(g=>g.p=0); beep(245,.12,"triangle");
+    }
+    function down(code) { return key.has(code); }
+    function press(code) { if (!down(code)) return false; key.delete(code); return true; }
+    function count() { return gens.filter(g=>g.p>=100).length; }
+    function move(a, dx, dy, r) {
+      let nx=Math.max(world.x+r,Math.min(world.x+world.w-r,a.x+dx)), ny=Math.max(world.y+r,Math.min(world.y+world.h-r,a.y+dy));
+      for (const [x,y,w,h] of obstacles) if (nx>x-r&&nx<x+w+r&&ny>y-r&&ny<y+h+r) { const tx=a.x+dx,ty=a.y; const ux=a.x,uy=a.y+dy; if (!(tx>x-r&&tx<x+w+r&&ty>y-r&&ty<y+h+r)) nx=tx,ny=ty; else if (!(ux>x-r&&ux<x+w+r&&uy>y-r&&uy<y+h+r)) nx=ux,ny=uy; else nx=a.x,ny=a.y; }
+      a.x=nx;a.y=ny;
+    }
+    function dist(a,b) { return Math.hypot(a.x-b.x,a.y-b.y); }
+    function closest(a) { return gens.reduce((best,g)=>g.p<100&&dist(a,g)<dist(a,best)?g:best,gens[0]); }
+    function update(dt) {
+      if (press("Escape")) { mode="menu"; return; }
+      if (mode !== "play") return;
+      elapsed+=dt; messageT=Math.max(0,messageT-dt); swing=Math.max(0,swing-dt); hit=Math.max(0,hit-dt);
+      const dx=(down("KeyD")?1:0)-(down("KeyA")?1:0), dy=(down("KeyS")?1:0)-(down("KeyW")?1:0), length=Math.hypot(dx,dy)||1;
+      if (role==="survivor") {
+        move(player,dx/length*180*dt,dy/length*180*dt,13);
+        const g=closest(player);
+        if (g&&g.p<100&&dist(player,g)<55&&down("KeyE")) { const old=g.p; g.p=Math.min(100,g.p+19*dt); if (Math.floor(old/10)!==Math.floor(g.p/10)) beep(360,.035,"square",.012); if (g.p===100&&old<100) { message="RELAY STABILIZED";messageT=2;beep(580,.2,"sine",.04); } }
+        if (count()===3&&dist(player,exit)<48&&down("KeyE")) end("YOU ESCAPED THE DARK");
+        aiWarden(dt);
+        if (dist(player,warden)<46&&swing<=0) { hp--;swing=1.5;hit=.55;message="THE WARDEN FOUND YOU";messageT=1.5;move(player,(player.x-warden.x)/46*48,(player.y-warden.y)/46*48,13);beep(92,.25,"sawtooth",.06);if(hp<=0)end("THE FOG CLAIMED YOU"); }
+      } else {
+        const run=down("KeyE")&&stamina>0, speed=run?170:122; stamina=Math.max(0,Math.min(100,stamina+(run?-30:17)*dt));
+        move(warden,dx/length*speed*dt,dy/length*speed*dt,16);
+        if (down("Space")&&swing<=0) { swing=.7;beep(110,.12,"sawtooth",.04); if(dist(warden,player)<68){hp--;hit=.42;message="STRIKE LANDED";messageT=1;beep(72,.28,"sawtooth",.06);if(hp<=0)end("THE WARDEN PREVAILED");} }
+        aiSurvivor(dt);
+      }
+    }
+    function aiWarden(dt) { const d=dist(warden,player), speed=d>260?103:142; move(warden,(player.x-warden.x)/d*speed*dt,(player.y-warden.y)/d*speed*dt,16); }
+    function aiSurvivor(dt) { let g=gens.reduce((a,b)=>a.p<b.p?a:b); let target=g; if(dist(warden,player)<165) target=player.x>640?{x:150,y:610}:{x:1120,y:610}; const d=dist(player,target);move(player,(target.x-player.x)/d*104*dt,(target.y-player.y)/d*104*dt,13);if(dist(player,g)<35&&g.p<100)g.p=Math.min(100,g.p+10*dt);if(count()===3&&dist(player,exit)<44)end("THE SURVIVOR ESCAPED"); }
+    function end(text) { mode="result";result=text;beep(text.includes("ESCAPED")?620:65,.45,text.includes("ESCAPED")?"sine":"sawtooth",.06); }
+    function rect(x,y,w,h,c) { ctx.fillStyle=c;ctx.fillRect(x,y,w,h); }
+    function text(t,x,y,size,c="#e9dec4",align="left") { ctx.fillStyle=c;ctx.font=`${size}px ui-monospace, monospace`;ctx.textAlign=align;ctx.fillText(t,x,y); }
+    function circle(x,y,r,c) { ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill(); }
+    function draw() {
+      rect(0,0,W,H,"#0c1115"); if(mode==="menu") return drawMenu(); if(mode==="result") return drawResult();
+      rect(world.x,world.y,world.w,world.h,"#172225");
+      ctx.strokeStyle="rgba(116,155,137,.12)"; for(let i=0;i<13;i++){ctx.beginPath();ctx.moveTo(50+i*101,76);ctx.lineTo(-80+i*101,656);ctx.stroke();}
+      for(const d of dust){d.y-=d.s*.016;if(d.y<76)d.y=656;circle(d.x,d.y,2,"rgba(205,224,208,.2)");}
+      for(const c of crows){circle(c.x,c.y,3,"#0b1011");rect(c.x-5,c.y,10,2,"#0b1011");}
+      for(const o of obstacles) { rect(...o,"#263634");rect(o[0]+4,o[1]+4,o[2]-8,o[3]-8,"#1b2929");ctx.strokeStyle="#496053";ctx.lineWidth=2;for(let x=o[0]+9;x<o[0]+o[2];x+=18){ctx.beginPath();ctx.moveTo(x,o[1]+4);ctx.lineTo(x-9,o[1]+o[3]-4);ctx.stroke();} }
+      for(const g of gens) drawGen(g); drawExit(); actor(warden,true);actor(player,false);drawHud(); if(hit>0)rect(0,0,W,H,`rgba(168,47,50,${hit*.2})`);
+    }
+    function drawGen(g){const active=g.p>=100;circle(g.x,g.y,31+(active?Math.sin(elapsed*8)*2:0),active?"rgba(231,168,77,.14)":"rgba(231,168,77,.025)");rect(g.x-15,g.y-17,30,34,"#2b3635");rect(g.x-10,g.y-13,20,10,active?"#e7a84d":"#465452");rect(g.x-20,g.y+18,40,3,"#76806d");rect(g.x-24,g.y+27,48,5,"#101617");rect(g.x-24,g.y+27,48*g.p/100,5,active?"#e7a84d":"#627d69");}
+    function drawExit(){const open=count()===3;circle(exit.x,exit.y,25,open?"rgba(231,168,77,.25)":"rgba(231,168,77,.04)");rect(exit.x-31,exit.y-10,62,24,"#202b2c");rect(exit.x-22,exit.y+14,3,23,"#738074");rect(exit.x+19,exit.y+14,3,23,"#738074");if(open)text("OPEN",exit.x,exit.y-23,11,"#e7a84d","center");}
+    function actor(a,hunter){circle(a.x,a.y+11,hunter?14:12,hunter?"#3c2626":"#29403b");circle(a.x,a.y-6,8,hunter?"#bc4b38":"#b9d6ca");rect(a.x-7,a.y+17,14,3,"#0d1515");if(hunter){ctx.strokeStyle="#bc4b38";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x+10,a.y+6);ctx.lineTo(a.x+24,a.y-5);ctx.stroke();if(swing>0&&((role==="survivor")||role==="warden")){ctx.strokeStyle="rgba(188,75,56,.7)";ctx.beginPath();ctx.arc(a.x,a.y,42,-.8,1.1);ctx.stroke();}}}
+    function drawHud(){rect(0,0,W,62,"#101719");text("NIGHTFALL",28,38,22);text("THE LAST SIGNAL",29,54,10,"#e7a84d");text(role==="survivor"?"SURVIVOR":"WARDEN",1005,30,14,"#e7a84d");text(`NIGHT ${String(Math.floor(elapsed/60)).padStart(2,"0")}:${String(Math.floor(elapsed%60)).padStart(2,"0")}`,1005,49,12,"#91a8a0");gens.forEach((g,i)=>{rect(538+i*70,24,52,8,"#263232");rect(538+i*70,24,52*g.p/100,8,g.p>=100?"#e7a84d":"#627d69");text(String(i+1),564+i*70,49,11,"#e9dec4","center");});if(role==="survivor"){text("VITALITY",30,690,11,"#91a8a0");for(let i=0;i<2;i++)circle(96+i*19,685,7,i<hp?"#bc4b38":"#293332");const g=closest(player);if(g.p<100&&dist(player,g)<55)text("HOLD [E]  RESTORE RELAY",640,690,14,"#e9dec4","center");else if(count()===3&&dist(player,exit)<52)text("HOLD [E]  ESCAPE",640,690,14,"#e7a84d","center");}else{ text("STAMINA",30,690,11,"#91a8a0");rect(93,682,135,8,"#293332");rect(93,682,135*stamina/100,8,"#bc4b38");text("[E] SPRINT    [SPACE] STRIKE",30,710,11,"#91a8a0");}if(messageT>0)text(message,640,99,16,"#e9dec4","center");}
+    function drawMenu(){for(let i=0;i<12;i++){ctx.strokeStyle="rgba(100,140,121,.12)";ctx.beginPath();ctx.moveTo(0,82+i*54);ctx.lineTo(W,64+i*54);ctx.stroke();}text("N I G H T F A L L",640,174,72,"#e9dec4","center");text("THE LAST SIGNAL",640,213,18,"#e7a84d","center");rect(458,242,364,2,"#b46943");text("AN ASYMMETRIC NIGHTMARE",640,320,17,"#91a8a0","center");text("Keep the signal alive, or silence it forever.",640,350,19,"#a7b4a8","center");button(290,475,320,"ENTER AS SURVIVOR","REPAIR / ESCAPE");button(670,475,320,"ENTER AS WARDEN","HUNT / STRIKE");text("CLICK A ROLE TO PLAY",640,642,13,"#718178","center");}
+    function button(x,y,w,title,sub){rect(x,y,w,75,"#172123");ctx.strokeStyle="#6b877a";ctx.strokeRect(x,y,w,75);rect(x,y,w,2,"#e7a84d");text(title,x+w/2,y+32,17,"#e9dec4","center");text(sub,x+w/2,y+56,11,"#627d69","center");}
+    function drawResult(){for(let i=0;i<7;i++)circle(160+i*175,160+(i%2)*310,180,"rgba(33,50,48,.32)");text("THE NIGHT IS OVER",640,244,19,"#e7a84d","center");text(result,640,326,45,"#e9dec4","center");text(`Relays restored: ${count()} / 3`,640,374,18,"#91a8a0","center");text("CLICK TO RETURN",640,516,14,"#84958a","center");}
+    function loop(t){const dt=Math.min(.05,(t-last)/1000||0);last=t;update(dt);draw();requestAnimationFrame(loop);} requestAnimationFrame(loop);
+  })();
+  </script>
 </body>
 </html>
