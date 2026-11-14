@@ -10,6 +10,8 @@
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090e10; color: #e9dec4; font-family: ui-monospace, "Cascadia Code", monospace; }
     #shell { width: min(1280px, 100vw); padding: 16px; }
     canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #142022; border: 1px solid #485f56; box-shadow: 0 20px 80px #000; image-rendering: pixelated; }
+    #play { display: block; margin: 14px auto 0; padding: 13px 34px; border: 1px solid #e7a84d; background: #172123; color: #e9dec4; cursor: pointer; font: 700 13px ui-monospace, monospace; letter-spacing: .16em; }
+    #play:hover { background: #2a3b37; }
     #tips { margin: 12px 4px 0; display: flex; justify-content: space-between; gap: 20px; color: #82958b; font-size: 11px; letter-spacing: .06em; }
     kbd { color: #e7a84d; font: inherit; }
     @media (max-width: 600px) { #shell { padding: 0; } canvas { border-width: 0; } #tips { padding: 0 12px; font-size: 9px; } }
@@ -18,12 +20,14 @@
 <body>
   <div id="shell">
     <canvas id="game" width="1280" height="720" aria-label="Nightfall playable game"></canvas>
+    <button id="play" type="button">PLAY NOW</button>
     <div id="tips"><span><kbd>WASD</kbd> MOVE &nbsp; <kbd>E</kbd> INTERACT / SPRINT &nbsp; <kbd>SPACE</kbd> STRIKE</span><span>ESC RETURN TO MENU</span></div>
   </div>
   <script>
   (() => {
     "use strict";
     const canvas = document.querySelector("#game"), ctx = canvas.getContext("2d");
+    const playButton = document.querySelector("#play");
     const W = 1280, H = 720, world = {x:42,y:76,w:1196,h:580};
     const key = new Set();
     const obstacles = [[114,308,196,34],[424,130,38,158],[744,166,170,35],[836,394,44,165],[400,526,220,35],[98,564,125,32],[1010,285,150,34],[575,355,50,95]];
@@ -38,14 +42,15 @@
     canvas.addEventListener("click", e => {
       const r=canvas.getBoundingClientRect(), x=(e.clientX-r.left)*W/r.width, y=(e.clientY-r.top)*H/r.height;
       if (mode === "menu") { if (x>290&&x<610&&y>475&&y<550) start("survivor"); if (x>670&&x<990&&y>475&&y<550) start("warden"); }
-      else if (mode === "result") mode="menu";
+      else if (mode === "result") { mode="menu"; playButton.hidden=false; }
     });
+    playButton.addEventListener("click", () => { start("survivor"); playButton.hidden = true; });
 
     function beep(freq=180, duration=.07, type="sine", volume=.025) {
       try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.type=type;o.frequency.value=freq;g.gain.value=volume;o.connect(g).connect(audio.destination);o.start();g.gain.exponentialRampToValueAtTime(.0001,audio.currentTime+duration);o.stop(audio.currentTime+duration); } catch (_) {}
     }
     function start(chosen) {
-      role=chosen; mode="play"; player=chosen==="survivor"?{x:310,y:485}:{x:980,y:218}; warden=chosen==="survivor"?{x:980,y:218}:{x:310,y:485}; hp=2; stamina=100; elapsed=0; swing=0; hit=0; result=""; message="RESTORE THREE RELAYS"; messageT=2.5; gens.forEach(g=>g.p=0); beep(245,.12,"triangle");
+      role=chosen; mode="play"; playButton.hidden=true; player=chosen==="survivor"?{x:310,y:485}:{x:980,y:218}; warden=chosen==="survivor"?{x:980,y:218}:{x:310,y:485}; hp=2; stamina=100; elapsed=0; swing=0; hit=0; result=""; message="RESTORE THREE RELAYS"; messageT=2.5; gens.forEach(g=>g.p=0); beep(245,.12,"triangle");
     }
     function down(code) { return key.has(code); }
     function press(code) { if (!down(code)) return false; key.delete(code); return true; }
@@ -58,7 +63,7 @@
     function dist(a,b) { return Math.hypot(a.x-b.x,a.y-b.y); }
     function closest(a) { return gens.reduce((best,g)=>g.p<100&&dist(a,g)<dist(a,best)?g:best,gens[0]); }
     function update(dt) {
-      if (press("Escape")) { mode="menu"; return; }
+      if (press("Escape")) { mode="menu"; playButton.hidden=false; return; }
       if (mode !== "play") return;
       elapsed+=dt; messageT=Math.max(0,messageT-dt); swing=Math.max(0,swing-dt); hit=Math.max(0,hit-dt);
       const dx=(down("KeyD")?1:0)-(down("KeyA")?1:0), dy=(down("KeyS")?1:0)-(down("KeyW")?1:0), length=Math.hypot(dx,dy)||1;
